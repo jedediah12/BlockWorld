@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>BlockWorld Prototype</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root{
+      --bg:#0f1724;
+      --panel:#0b1220;
+      --accent:#60a5fa;
+      --tile:#0ea5a4;
+      --player:#f97316;
+      --collect:#fde047;
+      --hazard:#ef4444;
+    }
+    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;}
+    body{background:linear-gradient(180deg,var(--bg),#071024);display:flex;align-items:center;justify-content:center;padding:16px;color:#e6eef8}
+    .wrap{max-width:960px;width:100%;display:grid;grid-template-columns:1fr 320px;gap:16px}
+    canvas{background:linear-gradient(180deg,#07304a,#042233);display:block;width:100%;height:auto;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,0.6)}
+    .panel{background:linear-gradient(180deg,var(--panel),#071122);padding:12px;border-radius:8px;min-height:320px;display:flex;flex-direction:column;gap:10px}
+    h1{margin:0;font-size:18px;color:var(--accent)}
+    .meta{font-size:13px;color:#9fb3d3}
+    .row{display:flex;gap:8px;align-items:center}
+    .score{font-weight:700;font-size:18px;color:#fff}
+    button{background:linear-gradient(180deg,#0b74d1,#095db0);color:white;border:0;padding:8px 10px;border-radius:6px;cursor:pointer}
+    .small{font-size:13px;padding:6px 8px;border-radius:6px;background:#0b1220;color:#9fb3d3;border:1px solid rgba(255,255,255,0.03)}
+    .controls{display:flex;gap:8px;flex-wrap:wrap}
+    .hint{font-size:13px;color:#9fb3d3}
+    .big{font-size:20px}
+    .center{display:flex;align-items:center;justify-content:center}
+    .touch-ctrls{display:none;gap:6px}
+    .touch-btn{width:54px;height:54px;border-radius:8px;background:rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:center;color:#e6eef8;font-weight:700;font-size:18px;user-select:none}
+    .footer{margin-top:auto;font-size:12px;color:#8ea8cc}
+    @media (max-width:900px){
+      .wrap{grid-template-columns:1fr;align-items:start}
+      .touch-ctrls{display:flex}
+      canvas{height:60vh}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="game" width="720" height="480" aria-label="BlockWorld game"></canvas>
+    <div class="panel" role="region" aria-label="Game controls and info">
+      <div>
+        <h1>BlockWorld Prototype</h1>
+        <div class="meta">Collect all yellow blocks. Avoid red hazards. Move with arrow keys / WASD or touch buttons.</div>
+      </div>
+
+      <div class="row">
+        <div class="score">Score: <span id="score">0</span></div>
+        <div style="flex:1"></div>
+        <div class="small">Time: <span id="time">0.0</span>s</div>
+      </div>
+
+      <div class="row controls">
+        <button id="restart">Restart</button>
+        <div class="small" id="status">Status: Playing</div>
+      </div>
+
+      <div class="hint">Goals: collect all targets to win. Each hazard hit costs a life. Collectibles respawn per level.</div>
+
+      <div class="touch-ctrls center" aria-hidden="false">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:6px">
+          <div class="touch-btn" id="up">▲</div>
+          <div style="display:flex;gap:6px">
+            <div class="touch-btn" id="left">◀</div>
+            <div class="touch-btn" id="down">▼</div>
+            <div class="touch-btn" id="right">▶</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer">Built with Canvas • Works on desktop & mobile</div>
+    </div>
+  </div>
+
+  <script>
+  // BlockWorld - small grid-based collectible game
+  (function(){
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    let W = canvas.width, H = canvas.height;
+
+    // Grid
+    const cols = 12;
+    const rows = 8;
+    let tile = Math.min(Math.floor(W/cols), Math.floor(H/rows));
+    const offsetX = Math.floor((W - tile*cols)/2);
+    const offsetY = Math.floor((H - tile*rows)/2);
+
+    // Game state
+    let player = {x:1,y:1,px:1,py:1,anim:0};
+    let collectibles = [];
+    let hazards = [];
+    let score = 0;
+    let lives = 3;
+    let startTime = performance.now();
+    let statusEl = document.getElementById('status');
+    let scoreEl = document.getElementById('score');
+    let timeEl = document.getElementById('time');
+    let playing = true;
+    let lastTick = performance.now();
+
+    // Level config
+    function reset(level=1){
+      tile = Math.min(Math.floor(W/cols), Math.floor(H/rows));
+      player = {x:1,y:1,px:1,py:1,anim:0};
+      collectibles = [];
+      hazards = [];
+      score = 0;
+      lives = 3;
+      startTime = performance.now();
+      playing = true;
+      generateCollectibles(4 + level); // increase difficulty later
+      generateHazards(1 + Math.floor(level/2));
+      statusEl.textContent = 'Status: Playing';
+      scoreEl.textContent = score;
+    }
+
+    function generateCollectibles(n){
+      while(collectibles.length < n){
+        const pos = randomEmpty();
+        if(!pos) break;
+        collectibles.push({x:pos.x,y:pos.y});
+      }
+    }
+    function generateHazards(n){
+      for(let i=0;i<n;i++){
+        const pos = randomEmpty();
+        if(!pos) break;
+        hazards.push({x:pos.x,y:pos.y,dir: Math.random() < 0.5 ? 1 : -1});
+      }
+    }
+
+    function randomEmpty(){
+      for(let attempts=0; attempts<40; attempts++){
+        const x = 1 + Math.floor(Math.random()*(cols-2));
+        const y = 1 + Math.floor(Math.random()*(rows-2));
+        if((x===player.x && y===player.y) || collectibles.find(c=>c.x===x&&c.y===y) || hazards.find(h=>h.x===x&&h.y===y)) continue;
+        return {x,y};
+      }
+      return null;
+    }
+
+    // Input
+    const inputQueue = [];
+    window.addEventListener('keydown', (e)=>{
+      if(!playing && e.key !== 'r') return;
+      const map = {'ArrowUp':'up','ArrowDown':'down','ArrowLeft':'left','ArrowRight':'right','w':'up','s':'down','a':'left','d':'right'};
+      const key = map[e.key] || map[e.key.toLowerCase()];
+      if(key) {
+        e.preventDefault();
+        inputQueue.push(key);
+      }
+      if(e.key.toLowerCase()==='r') reset();
+    });
+
+    // Touch buttons
+    const upBtn = document.getElementById('up');
+    const leftBtn = document.getElementById('left');
+    const downBtn = document.getElementById('down');
+    const rightBtn = document.getElementById('right');
+    [upBtn,leftBtn,downBtn,rightBtn].forEach(btn=>{
+      btn.addEventListener('touchstart', (e)=>{ e.preventDefault(); inputQueue.push(btn.id); });
+      btn.addEventListener('mousedown', ()=> inputQueue.push(btn.id));
+    });
+
+    document.getElementById('restart').addEventListener('click', ()=> reset());
+
+    // Movement and game logic
+    function tryMove(dx,dy){
+      const nx = player.x + dx, ny = player.y + dy;
+      if(nx < 0 || nx >= cols || ny < 0 || ny >= rows) return;
+      // wall border: make edges non-walkable except inner border 1..cols-2
+      if(nx === 0 || nx === cols-1 || ny === 0 || ny === rows-1) return;
+      // move
+      player.px = player.x;
+      player.py = player.y;
+      player.x = nx;
+      player.y = ny;
+      player.anim = 1.0; // simple animation flag
+      checkCollect();
+      checkHazardCollision();
+    }
+
+    function checkCollect(){
+      for(let i=0;i<collectibles.length;i++){
+        if(collectibles[i].x===player.x && collectibles[i].y===player.y){
+          collectibles.splice(i,1);
+          score += 10;
+          scoreEl.textContent = score;
+          // spawn a new one after delay
+          setTimeout(()=> generateCollectibles(1), 800);
+          // Win condition when none left (and none scheduled) - we check immediately
+          if(collectibles.length === 0){
+            playing = false;
+            statusEl.textContent = 'Status: You Win! Press Restart';
+          }
+          return;
+        }
+      }
+    }
+
+    function checkHazardCollision(){
+      for(let i=0;i<hazards.length;i++){
+        if(hazards[i].x===player.x && hazards[i].y===player.y){
+          lives -= 1;
+          statusEl.textContent = `Status: Hit! Lives: ${lives}`;
+          // knockback
+          player.x = Math.max(1, Math.min(cols-2, player.x-1));
+          if(lives <= 0){
+            playing = false;
+            statusEl.textContent = 'Status: Game Over. Press Restart';
+          }
+          return;
+        }
+      }
+    }
+
+    // Hazards move back-and-forth horizontally
+    function updateHazards(dt){
+      for(let h of hazards){
+        if(Math.random() < 0.02) h.dir *= -1;
+        const nx = h.x + h.dir;
+        if(nx <= 0 || nx >= cols-1) h.dir *= -1;
+        else {
+          // occasionally move
+          if(Math.random() < 0.35) h.x = nx;
+        }
+        // if hazard moved onto player
+        if(h.x === player.x && h.y === player.y){ checkHazardCollision(); }
+      }
+    }
+
+    // Main loop
+    function tick(now){
+      const dt = (now - lastTick) / 1000;
+      lastTick = now;
+      if(playing){
+        // process one input per tick for snappy grid controls
+        if(inputQueue.length){
+          const key = inputQueue.shift();
+          if(key === 'up') tryMove(0,-1);
+          else if(key === 'down') tryMove(0,1);
+          else if(key === 'left') tryMove(-1,0);
+          else if(key === 'right') tryMove(1,0);
+          else if(key === 'w') tryMove(0,-1);
+          else if(key === 's') tryMove(0,1);
+          else if(key === 'a') tryMove(-1,0);
+          else if(key === 'd') tryMove(1,0);
+        }
+        // hazards update
+        updateHazards(dt);
+      }
+
+      draw(now);
+      requestAnimationFrame(tick);
+    }
+
+    function draw(now){
+      // background
+      ctx.clearRect(0,0,W,H);
+      // grid
+      for(let y=0;y<rows;y++){
+        for(let x=0;x<cols;x++){
+          const gx = offsetX + x*tile;
+          const gy = offsetY + y*tile;
+          // border tiles
+          if(x===0 || x===cols-1 || y===0 || y===rows-1){
+            ctx.fillStyle = '#062033';
+            ctx.fillRect(gx,gy,tile,tile);
+            // subtle border
+            ctx.strokeStyle = 'rgba(255,255,255,0.02)';
+            ctx.strokeRect(gx+0.5,gy+0.5,tile-1,tile-1);
+          } else {
+            ctx.fillStyle = 'rgba(255,255,255,0.02)';
+            ctx.fillRect(gx,gy,tile,tile);
+          }
+        }
+      }
+
+      // collectibles
+      for(let c of collectibles){
+        drawTile(c.x,c.y, ()=> {
+          // yellow coin-like
+          const cx = offsetX + c.x*tile + tile/2;
+          const cy = offsetY + c.y*tile + tile/2;
+          const r = tile*0.22;
+          // shadow
+          ctx.fillStyle = 'rgba(0,0,0,0.25)';
+          ctx.beginPath(); ctx.ellipse(cx,cy+r*0.8,r*1.05,r*0.6,0,0,Math.PI*2); ctx.fill();
+          // coin
+          ctx.fillStyle = 'var(--collect)';
+          ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
+          ctx.strokeStyle = '#b07f03'; ctx.lineWidth=2; ctx.stroke();
+        });
+      }
+
+      // hazards
+      for(let h of hazards){
+        drawTile(h.x,h.y, ()=> {
+          const gx = offsetX + h.x*tile;
+          const gy = offsetY + h.y*tile;
+          ctx.fillStyle = 'var(--hazard)';
+          const pad = tile*0.18;
+          ctx.fillRect(gx+pad, gy+pad, tile-pad*2, tile-pad*2);
+          // eye
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(gx+tile*0.38, gy+tile*0.32, tile*0.08, tile*0.08);
+          ctx.fillRect(gx+tile*0.54, gy+tile*0.32, tile*0.08, tile*0.08);
+        });
+      }
+
+      // player (with simple animation)
+      const anim = player.anim;
+      if(player.anim > 0) player.anim = Math.max(0, player.anim - 0.06);
+      const interX = player.px + (player.x - player.px)*(1 - player.anim);
+      const interY = player.py + (player.y - player.py)*(1 - player.anim);
+      drawTile(interX, interY, ()=> {
+        const gx = offsetX + interX*tile;
+        const gy = offsetY + interY*tile;
+        const pad = tile*0.16;
+        ctx.fillStyle = 'var(--player)';
+        roundRect(ctx, gx+pad, gy+pad, tile-pad*2, tile-pad*2, 6);
+        ctx.fill();
+        // highlight
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      });
+
+      // overlay info
+      const elapsed = ((now - startTime)/1000);
+      timeEl.textContent = elapsed.toFixed(1);
+    }
+
+    function drawTile(x,y,cb){
+      // supports float x,y for interpolation
+      const gx = offsetX + x*tile;
+      const gy = offsetY + y*tile;
+      ctx.save();
+      ctx.translate(gx,gy);
+      cb();
+      ctx.restore();
+    }
+
+    function roundRect(ctx, x, y, w, h, r){
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    // Resize handling
+    function resize(){
+      // maintain canvas internal size (we keep logical resolution fixed, but scale on CSS for responsiveness)
+      W = canvas.width;
+      H = canvas.height;
+      // recalc tile offsets using current canvas size
+      // For simplicity we won't change cols/rows; tile computed from W,H
+      // but keep offsetX/Y recomputed via globals at top of file (recreate them)
+      // (recompute based on present W/H)
+      // NOTE: we defined offsetX/Y once; to adapt to resizing, recalc here:
+      const newTile = Math.min(Math.floor(W/cols), Math.floor(H/rows));
+      // center the grid on the canvas
+      // Using closure variables is easier if we update them:
+      tile = newTile;
+      // compute offsets:
+      // (we'll update offsetX/Y via reassign to DOM-less consts by using window-level variables)
+      // but since offsetX/Y were const derived earlier, re-calc locally for drawing by overriding global offsets via closure variables
+      // To keep it simple in this small game, we will not change canvas resolution on window resize.
+    }
+    window.addEventListener('resize', () => { /* No-op for now */ });
+
+    // Start
+    reset();
+    requestAnimationFrame((t)=>{ lastTick = t; requestAnimationFrame(tick); });
+
+  })();
+  </script>
+</body>
+</html>
